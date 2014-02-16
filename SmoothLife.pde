@@ -1,5 +1,7 @@
+import de.looksgood.ani.*;
+
 // Size of cells
-int cellSize = 5;
+int cellSize = 20;
 
 // How likely for a cell to be alive at start (in percentage)
 float probabilityOfAliveAtStart = 15;
@@ -20,30 +22,62 @@ color dyingColor = color(30, 30, 30);
 color deadColor = color(0);
 
 // Array of cells
-int[][] cells; 
+Cell[][] cells; 
 // Buffer to record the state of the cells and use this while changing the others in the interations
-int[][] cellsBuffer; 
+Cell[][] cellsBuffer; 
 
 // Pause
 boolean pause = false;
 
+class Cell {
+ int xpos, ypos, state, diameter;
+ Cell (int x, int y, int s) {
+   xpos = x;
+   ypos = y;
+   state = s;
+   diameter = cellSize;
+ }
+ void draw() {
+  switch (state) {
+    case DEAD:
+      fill(deadColor);
+      break;
+    case DYING:
+      fill(dyingColor);
+      break;
+    case BIRTH:
+      fill(birthColor);
+      break;
+    case ALIVE:
+      fill(aliveColor);
+      break;
+    }
+    ellipse(xpos*cellSize+cellSize/2, ypos*cellSize+cellSize/2, diameter, diameter); 
+ }
+ 
+}
+
 void setup() {
-  size (640, 360);
+  size (1280, 720);
+
+   Ani.init(this);
+   Ani.setDefaultEasing(Ani.BACK_IN_OUT);
 
   // Instantiate arrays 
-  cells = new int[width/cellSize][height/cellSize];
-  cellsBuffer = new int[width/cellSize][height/cellSize];
+  cells = new Cell[width/cellSize][height/cellSize];
+  cellsBuffer = new Cell[width/cellSize][height/cellSize];
 
   // This stroke will draw the background grid
   stroke(48);
-
-  noSmooth();
+  smooth();
 
   // Initialization of cells
   for (int x=0; x<width/cellSize; x++) {
     for (int y=0; y<height/cellSize; y++) {
       float state = random (100);
-      cells[x][y] = (state > probabilityOfAliveAtStart) ? DEAD : ALIVE;
+      //cells[x][y] = (state > probabilityOfAliveAtStart) ? DEAD : ALIVE;
+      cells[x][y] = new Cell(x, y, (state > probabilityOfAliveAtStart) ? DEAD : ALIVE);
+      cellsBuffer[x][y] = new Cell(x, y, DEAD);
     }
   } 
   background(0); // Fill in black in case cells don't cover all the windows
@@ -55,21 +89,7 @@ void draw() {
   //Draw grid
   for (int x=0; x<width/cellSize; x++) {
     for (int y=0; y<height/cellSize; y++) {
-      switch (cells[x][y]) {
-        case DEAD:
-          fill(deadColor);
-          break;
-        case DYING:
-          fill(dyingColor);
-          break;
-        case BIRTH:
-          fill(birthColor);
-          break;
-        case ALIVE:
-          fill(aliveColor);
-          break;
-      }
-      rect (x*cellSize, y*cellSize, cellSize, cellSize);
+      cells[x][y].draw();
     }
   }
   // Iterate if timer ticks
@@ -89,11 +109,11 @@ void draw() {
     yCellOver = constrain(yCellOver, 0, height/cellSize-1);
 
     // Check against cells in buffer
-    if (cellsBuffer[xCellOver][yCellOver]<=ALIVE) { // Cell is alive
-      cells[xCellOver][yCellOver]=DEAD; // Kill
+    if (cellsBuffer[xCellOver][yCellOver].state >= BIRTH) { // Cell is alive
+      cells[xCellOver][yCellOver].state =DEAD; // Kill
       fill(deadColor); // Fill with kill color
     } else { // Cell is dead
-      cells[xCellOver][yCellOver]=ALIVE; // Make alive
+      cells[xCellOver][yCellOver].state = ALIVE; // Make alive
       fill(aliveColor); // Fill alive color
     }
   } 
@@ -101,7 +121,7 @@ void draw() {
     // Save cells to buffer (so we opeate with one array keeping the other intact)
     for (int x=0; x<width/cellSize; x++) {
       for (int y=0; y<height/cellSize; y++) {
-        cellsBuffer[x][y] = cells[x][y];
+        cellsBuffer[x][y].state = cells[x][y].state;
       }
     }
   }
@@ -113,7 +133,7 @@ void iteration() { // When the clock ticks
   // Save cells to buffer (so we opeate with one array keeping the other intact)
   for (int x=0; x<width/cellSize; x++) {
     for (int y=0; y<height/cellSize; y++) {
-      cellsBuffer[x][y] = cells[x][y];
+      cellsBuffer[x][y].state = cells[x][y].state;
     }
   }
 
@@ -126,7 +146,7 @@ void iteration() { // When the clock ticks
         for (int yy=y-1; yy<=y+1;yy++) {  
           if (((xx>=0)&&(xx<width/cellSize))&&((yy>=0)&&(yy<height/cellSize))) { // Make sure you are not out of bounds
             if (!((xx==x)&&(yy==y))) { // Make sure to to check against self
-              if (cellsBuffer[xx][yy]==ALIVE){
+              if (cellsBuffer[xx][yy].state >= BIRTH){
                 neighbours ++; // Check alive neighbours and count them
               }
             } // End of if
@@ -134,22 +154,35 @@ void iteration() { // When the clock ticks
         } // End of yy loop
       } //End of xx loop
       // We've checked the neigbours: apply rules!
-      if (cellsBuffer[x][y]<=BIRTH) { // The cell is alive: kill it if necessary
+      if (cellsBuffer[x][y].state >=BIRTH) { // The cell is alive: kill it if necessary
         if (neighbours < 2 || neighbours > 3) {
-          cells[x][y] = DYING; // Die unless it has 2 or 3 neighbours
+          cells[x][y].state = DYING; // Die unless it has 2 or 3 neighbours
         } else {
-          cells[x][y] = ALIVE; // upgrade birthed cells to fully alive
+          cells[x][y].state = ALIVE; // upgrade birthed cells to fully alive
         }
       } 
       else { // The cell is dying or dead: make it live if necessary      
         if (neighbours == 3 ) {
-          cells[x][y] = BIRTH; // Only if it has 3 neighbours
+          cells[x][y].state = BIRTH; // Only if it has 3 neighbours
         } else {
-          cells[x][y] = DEAD; // upgrade dying cells to fully dead
+          cells[x][y].state = DEAD; // upgrade dying cells to fully dead
         }
       } // End of if
     } // End of y loop
   } // End of x loop
+  
+/*  
+  for (int x=0; x<width/cellSize; x++) {
+    for (int y=0; y<height/cellSize; y++) {
+      if (cells[x][y].state >= BIRTH) {
+        Ani.to(cells[x][y], interval/2, "diameter", cellSize);
+      } else {
+        Ani.from(cells[x][y], interval/2, "diameter", 0);   
+      }     
+    }
+  }
+*/
+  
 } // End of function
 
 void keyPressed() {
@@ -158,7 +191,7 @@ void keyPressed() {
     for (int x=0; x<width/cellSize; x++) {
       for (int y=0; y<height/cellSize; y++) {
         float state = random (100);
-        cells[x][y] = (state > probabilityOfAliveAtStart) ? DEAD : ALIVE;
+        cells[x][y].state = (state > probabilityOfAliveAtStart) ? DEAD : ALIVE;
       }
     }
   }
@@ -168,7 +201,7 @@ void keyPressed() {
   if (key=='c' || key == 'C') { // Clear all
     for (int x=0; x<width/cellSize; x++) {
       for (int y=0; y<height/cellSize; y++) {
-        cells[x][y] = DEAD; // Save all to zero
+        cells[x][y].state = DEAD; // Save all to zero
       }
     }
   }
