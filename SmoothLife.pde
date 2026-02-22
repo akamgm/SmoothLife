@@ -2,6 +2,9 @@ import de.looksgood.ani.*;
 
 // Configuration
 int cellSize = 25;
+int boardCols = 48; // Set to 0 to auto-fit window
+int boardRows = 32; // Set to 0 to auto-fit window
+boolean torusBoard = true; // If true, edges wrap around
 float probabilityOfAliveAtStart = 15;
 float generationDuration = 3.0; // Seconds per generation
 int lastRecordedTime = 0;
@@ -15,7 +18,6 @@ final int DYING = 3;
 // Colors
 color aliveColor = color(100, 255, 150);
 color birthColor = color(50, 200, 100);
-color dyingColor = color(150, 100, 50);
 color deadColor = color(20, 20, 25);
 
 // Simulation grid
@@ -67,7 +69,7 @@ class Cell {
       Ani.to(this, duration, "opacity", 255, Ani.LINEAR);
     }
     else if (state == DYING) {
-      // Evaporate
+      // Shrink and fade (keep current color — don't change it)
       Ani.to(this, duration, "diameter", 0, Ani.EXPO_IN);
       Ani.to(this, duration, "opacity", 0, Ani.LINEAR);
       Ani.to(this, duration, "offsetY", -cellSize * 0.5, Ani.QUAD_IN); // Float up slightly
@@ -94,8 +96,7 @@ class Cell {
 
     noStroke();
     if (state == BIRTH) fill(birthColor, opacity);
-    else if (state == DYING) fill(dyingColor, opacity);
-    else fill(aliveColor, opacity);
+    else fill(aliveColor, opacity); // DYING uses aliveColor — just shrinks and fades
 
     // Blob shape (slightly irregular ellipse)
     float pulse = sin(frameCount * 0.05 + (x + y)) * 2;
@@ -111,8 +112,8 @@ void setup() {
 
   Ani.init(this);
 
-  cols = width / cellSize;
-  rows = height / cellSize;
+  cols = (boardCols > 0) ? boardCols : width / cellSize;
+  rows = (boardRows > 0) ? boardRows : height / cellSize;
   cells = new Cell[cols][rows];
 
   for (int i = 0; i < cols; i++) {
@@ -198,8 +199,15 @@ int countNeighbors(int x, int y) {
     for (int j = -1; j <= 1; j++) {
       if (i == 0 && j == 0) continue;
 
-      int col = (x + i + cols) % cols;
-      int row = (y + j + rows) % rows;
+      int col, row;
+      if (torusBoard) {
+        col = (x + i + cols) % cols;
+        row = (y + j + rows) % rows;
+      } else {
+        col = x + i;
+        row = y + j;
+        if (col < 0 || col >= cols || row < 0 || row >= rows) continue;
+      }
 
       if (cells[col][row].state == ALIVE || cells[col][row].state == BIRTH) {
         count++;
@@ -214,8 +222,15 @@ void findParents(int x, int y) {
     for (int j = -1; j <= 1; j++) {
       if (i == 0 && j == 0) continue;
 
-      int col = (x + i + cols) % cols;
-      int row = (y + j + rows) % rows;
+      int col, row;
+      if (torusBoard) {
+        col = (x + i + cols) % cols;
+        row = (y + j + rows) % rows;
+      } else {
+        col = x + i;
+        row = y + j;
+        if (col < 0 || col >= cols || row < 0 || row >= rows) continue;
+      }
 
       if (cells[col][row].state == ALIVE || cells[col][row].state == BIRTH) {
         cells[x][y].parents.add(new PVector(col, row));
