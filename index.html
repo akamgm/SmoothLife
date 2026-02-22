@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SmoothLife</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 16px; left: 16px;
+    color: rgba(255,255,255,0.6);
+    font: 13px/1.8 monospace;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+<script>
+// ─── Config ────────────────────────────────────────────────────────────────
+const CFG = {
+  cellSize:   6,
+  cols:       0,   // 0 = auto-fit
+  rows:       0,
+  torus:      true,
+  birthProb:  0.15,
+  genDur:     3.0, // seconds
+};
+
+// ─── State constants ────────────────────────────────────────────────────────
+const DEAD = 0, BIRTH = 1, ALIVE = 2, DYING = 3;
+
+// ─── Colors ─────────────────────────────────────────────────────────────────
+const COLOR = {
+  alive: [100, 255, 150],
+  birth: [50,  200, 100],
+  dead:  [20,   20,  25],
+};
+
+function rgba([r, g, b], a = 1) {
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// ─── Easing helpers ─────────────────────────────────────────────────────────
+function easeExpoOut(t) { return t === 1 ? 1 : 1 - Math.pow(2, -10 * t); }
+function easeExpoIn(t)  { return t === 0 ? 0 : Math.pow(2, 10 * t - 10); }
+function easeElasticOut(t) {
+  if (t === 0 || t === 1) return t;
+  return Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * (2 * Math.PI / 3)) + 1;
+}
+function easeQuadIn(t)  { return t * t; }
+function easeLinear(t)  { return t; }
+
+// ─── Tweening ───────────────────────────────────────────────────────────────
+// Lightweight tween store — no library needed
+const tweens = [];
+
+function tweenTo(obj, prop, target, duration, easeFn, startVal) {
+  // Cancel existing tween for same obj+prop
+  for (let i = tweens.length - 1; i >= 0; i--) {
+    if (tweens[i].obj === obj && tweens[i].prop === prop) {
+      tweens.splice(i, 1);
+    }
+  }
+  tweens.push({
+    obj, prop,
+    from: startVal !== undefined ? startVal : obj[prop],
+    to: target,
+    duration,
+    elapsed: 0,
+    ease: easeFn,
+  });
+}
+
+function stepTweens(dt) {
+  for (let i = tweens.length - 1; i >= 0; i--) {
+    const tw = tweens[i];
+    tw.elapsed += dt;
+    const t = Math.min(tw.elapsed / tw.duration, 1);
+    tw.obj[tw.prop] = tw.from + (tw.to - tw.from) * tw.ease(t);
+    if (t >= 1) tweens.splice(i, 1);
+  }
+}
+
+// ─── Cell ───────────────────────────────────────────────────────────────────
+const BLOB_N = 8;
+
+class Cell {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.state    = DEAD;
+    this.nextState = DEAD;
+    this.diameter = 0;
+    this.opacity  = 0;
+    this.offsetX  = 0;
+    this.offsetY  = 0;
+
+    // Stable per-cell blob shape
+    this.blobAngle = new Float32Array(BLOB_N);
+    this.blobRMult = new Float32Array(BLOB_N);
+    for (let k = 0; k < BLOB_N; k++) {
+      this.blobAngle[k] = (2 * Math.PI * k / BLOB_N) + (Math.random() - 0.5) * 0.5;
+      this.blobRMult[k] = 0.72 + Math.random() * 0.43;
+    }
+
+    this.parents = []; // [{x,y}] of live neighbours at birth
+  }
+
+  triggerAnimations(dur) {
+    const cs = CFG.cellSize;
+    if (this.state === BIRTH) {
+      this.diameter = 0;
+      this.opacity  = 0;
+      if (this.parents.length > 0) {
+        const p = this.parents[Math.random() * this.parents.length | 0];
+        this.offsetX = (p.x - this.x) * cs;
+        this.offsetY = (p.y - this.y) * cs;
+        tweenTo(this, 'offsetX', 0, dur, easeExpoOut);
+        tweenTo(this, 'offsetY', 0, dur, easeExpoOut);
+      }
+      tweenTo(this, 'diameter', cs * 0.8, dur, easeElasticOut);
+      tweenTo(this, 'opacity',  1,        dur, easeLinear);
+    } else if (this.state === DYING) {
+      tweenTo(this, 'diameter', 0,           dur, easeExpoIn);
+      tweenTo(this, 'opacity',  0,           dur, easeLinear);
+      tweenTo(this, 'offsetY',  -cs * 0.5,  dur, easeQuadIn);
+    } else if (this.state === ALIVE) {
+      this.diameter = cs * 0.8;
+      this.opacity  = 1;
+      this.offsetX  = 0;
+      this.offsetY  = 0;
+    } else {
+      this.diameter = 0;
+      this.opacity  = 0;
+    }
+  }
+
+  draw(ctx, t) {
+    if (this.opacity <= 0 && this.state === DEAD) return;
+
+    const cs  = CFG.cellSize;
+    const cx  = this.x * cs + cs * 0.5 + this.offsetX;
+    const cy  = this.y * cs + cs * 0.5 + this.offsetY;
+    const baseR = this.diameter * 0.5;
+
+    const breathe = 1 + Math.sin(t * 0.04 + this.x * 0.7 + this.y * 1.1) * 0.06;
+    const col = this.state === BIRTH ? COLOR.birth : COLOR.alive;
+
+    ctx.beginPath();
+    // Catmull-Rom via cubic bezier approximation:
+    // use a simple closed smooth polygon with moveTo + quadraticCurveTo
+    // Actually just use cardinal spline via control points manually.
+    // Easiest faithful port: draw a closed smooth curve through blob points.
+    const pts = [];
+    for (let k = 0; k < BLOB_N; k++) {
+      const r = baseR * this.blobRMult[k] * breathe;
+      pts.push([cx + Math.cos(this.blobAngle[k]) * r,
+                cy + Math.sin(this.blobAngle[k]) * r]);
+    }
+    // Closed cardinal spline (tension 0.5) — matches Processing's curveVertex feel
+    const tension = 0.5;
+    const n = pts.length;
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 0; i < n; i++) {
+      const p0 = pts[(i - 1 + n) % n];
+      const p1 = pts[i];
+      const p2 = pts[(i + 1) % n];
+      const p3 = pts[(i + 2) % n];
+      // Catmull-Rom → cubic bezier control points
+      const cp1x = p1[0] + (p2[0] - p0[0]) * tension / 2;
+      const cp1y = p1[1] + (p2[1] - p0[1]) * tension / 2;
+      const cp2x = p2[0] - (p3[0] - p1[0]) * tension / 2;
+      const cp2y = p2[1] - (p3[1] - p1[1]) * tension / 2;
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2[0], p2[1]);
+    }
+    ctx.closePath();
+    ctx.fillStyle = rgba(col, this.opacity);
+    ctx.fill();
+  }
+}
+
+// ─── Grid ───────────────────────────────────────────────────────────────────
+let cols, rows, cells;
+
+function initGrid() {
+  const cs = CFG.cellSize;
+  cols = CFG.cols > 0 ? CFG.cols : (canvas.width  / cs) | 0;
+  rows = CFG.rows > 0 ? CFG.rows : (canvas.height / cs) | 0;
+  cells = [];
+  for (let i = 0; i < cols; i++) {
+    cells[i] = [];
+    for (let j = 0; j < rows; j++) {
+      const c = new Cell(i, j);
+      if (Math.random() < CFG.birthProb) {
+        c.state    = ALIVE;
+        c.diameter = CFG.cellSize * 0.8;
+        c.opacity  = 1;
+      }
+      cells[i][j] = c;
+    }
+  }
+}
+
+function countNeighbors(x, y) {
+  let count = 0;
+  for (let di = -1; di <= 1; di++) {
+    for (let dj = -1; dj <= 1; dj++) {
+      if (di === 0 && dj === 0) continue;
+      let col, row;
+      if (CFG.torus) {
+        col = (x + di + cols) % cols;
+        row = (y + dj + rows) % rows;
+      } else {
+        col = x + di; row = y + dj;
+        if (col < 0 || col >= cols || row < 0 || row >= rows) continue;
+      }
+      const s = cells[col][row].state;
+      if (s === ALIVE || s === BIRTH) count++;
+    }
+  }
+  return count;
+}
+
+function iteration(dur) {
+  // Phase 1: compute next states
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      const c = cells[i][j];
+      const n = countNeighbors(i, j);
+      c.parents.length = 0;
+
+      if (c.state === ALIVE || c.state === BIRTH) {
+        c.nextState = (n < 2 || n > 3) ? DYING : ALIVE;
+      } else {
+        if (n === 3) {
+          c.nextState = BIRTH;
+          // collect parents
+          for (let di = -1; di <= 1; di++) {
+            for (let dj = -1; dj <= 1; dj++) {
+              if (di === 0 && dj === 0) continue;
+              let col, row;
+              if (CFG.torus) {
+                col = (i + di + cols) % cols;
+                row = (j + dj + rows) % rows;
+              } else {
+                col = i + di; row = j + dj;
+                if (col < 0 || col >= cols || row < 0 || row >= rows) continue;
+              }
+              const s = cells[col][row].state;
+              if (s === ALIVE || s === BIRTH) c.parents.push({x: col, y: row});
+            }
+          }
+        } else {
+          c.nextState = DEAD;
+        }
+      }
+    }
+  }
+
+  // Phase 2: apply + animate
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      const c = cells[i][j];
+      c.state = c.nextState;
+      c.triggerAnimations(dur);
+    }
+  }
+}
+
+// ─── Canvas & loop ──────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const hud    = document.getElementById('hud');
+
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', () => { resize(); initGrid(); iteration(CFG.genDur); });
+
+initGrid();
+iteration(CFG.genDur);
+
+let pause = false;
+let genStart = performance.now();
+let lastTime = performance.now();
+let frameCount = 0;
+
+function loop(now) {
+  requestAnimationFrame(loop);
+
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+  frameCount++;
+
+  stepTweens(dt);
+
+  // Background
+  ctx.fillStyle = rgba(COLOR.dead);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Grid lines only when cells are large enough
+  if (CFG.cellSize >= 10) {
+    ctx.strokeStyle = 'rgba(30,30,40,1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= canvas.width; x += CFG.cellSize) {
+      ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height);
+    }
+    for (let y = 0; y <= canvas.height; y += CFG.cellSize) {
+      ctx.moveTo(0, y); ctx.lineTo(canvas.width, y);
+    }
+    ctx.stroke();
+  }
+
+  // Draw cells
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      cells[i][j].draw(ctx, frameCount);
+    }
+  }
+
+  // Advance generation
+  if (!pause && now - genStart >= CFG.genDur * 1000) {
+    genStart += CFG.genDur * 1000;
+    iteration(CFG.genDur);
+  }
+
+  // HUD
+  hud.textContent =
+    `Gen: ${nf(CFG.genDur, 1)}s  (+/- to change)\n` +
+    `Grid: ${cols}×${rows}  Cell: ${CFG.cellSize}px\n` +
+    `Space: Pause  R: Reset  C: Clear  T: Toggle torus`;
+}
+
+function nf(v, dec) { return v.toFixed(dec); }
+
+requestAnimationFrame(loop);
+
+// ─── Input ──────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  switch (e.key) {
+    case ' ':         pause = !pause; break;
+    case 'r': case 'R': reset(); break;
+    case 'c': case 'C': clearGrid(); break;
+    case 't': case 'T': CFG.torus = !CFG.torus; break;
+    case '+': case '=':
+      CFG.genDur = Math.max(0.5, CFG.genDur - 0.5);
+      genStart = performance.now(); break;
+    case '-': case '_':
+      CFG.genDur += 0.5;
+      genStart = performance.now(); break;
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  const i = (e.clientX / CFG.cellSize) | 0;
+  const j = (e.clientY / CFG.cellSize) | 0;
+  if (i < 0 || i >= cols || j < 0 || j >= rows) return;
+  const c = cells[i][j];
+  if (c.state === DEAD) {
+    c.state = ALIVE; c.diameter = CFG.cellSize * 0.8; c.opacity = 1;
+  } else {
+    c.state = DEAD; c.diameter = 0; c.opacity = 0;
+  }
+});
+
+function reset() {
+  tweens.length = 0;
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      const c = cells[i][j];
+      if (Math.random() < CFG.birthProb) {
+        c.state = ALIVE; c.diameter = CFG.cellSize * 0.8; c.opacity = 1;
+      } else {
+        c.state = DEAD; c.diameter = 0; c.opacity = 0;
+      }
+      c.offsetX = c.offsetY = 0;
+    }
+  }
+  iteration(CFG.genDur);
+  genStart = performance.now();
+}
+
+function clearGrid() {
+  tweens.length = 0;
+  for (let i = 0; i < cols; i++) {
+    for (let j = 0; j < rows; j++) {
+      const c = cells[i][j];
+      c.state = DEAD; c.diameter = 0; c.opacity = 0;
+    }
+  }
+}
+</script>
+</body>
+</html>
