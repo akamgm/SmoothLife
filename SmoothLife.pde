@@ -7,7 +7,7 @@ int boardRows = 32; // Set to 0 to auto-fit window
 boolean torusBoard = true; // If true, edges wrap around
 float probabilityOfAliveAtStart = 15;
 float generationDuration = 3.0; // Seconds per generation
-int lastRecordedTime = 0;
+float generationStartTime = 0; // millis() when current generation began
 
 // State constants
 final int DEAD = 0;
@@ -49,7 +49,8 @@ class Cell {
   }
 
   void triggerAnimations() {
-    float duration = generationDuration * 0.9; // Leave a small buffer
+    // Animations fill the full generation duration — no buffer gap
+    float duration = generationDuration;
 
     if (state == BIRTH) {
       // Ooze in from parents
@@ -127,7 +128,9 @@ void setup() {
     }
   }
 
-  lastRecordedTime = millis();
+  // Compute the first generation immediately and start animating
+  iteration();
+  generationStartTime = millis();
 }
 
 void draw() {
@@ -145,10 +148,10 @@ void draw() {
     }
   }
 
-  // Timer for logic
-  if (!pause && millis() - lastRecordedTime > generationDuration * 1000) {
+  // Advance generation exactly when the current animation period ends
+  if (!pause && millis() - generationStartTime >= generationDuration * 1000) {
+    generationStartTime += generationDuration * 1000; // Step forward, not reset — prevents drift
     iteration();
-    lastRecordedTime = millis();
   }
 
   // UI Info
@@ -243,8 +246,14 @@ void keyPressed() {
   if (key == ' ') pause = !pause;
   if (key == 'r' || key == 'R') reset();
   if (key == 'c' || key == 'C') clearGrid();
-  if (key == '+' || key == '=') generationDuration = max(0.1, generationDuration - 0.5);
-  if (key == '-' || key == '_') generationDuration += 0.5;
+  if (key == '+' || key == '=') {
+    generationDuration = max(0.5, generationDuration - 0.5);
+    generationStartTime = millis(); // Restart current period at new duration
+  }
+  if (key == '-' || key == '_') {
+    generationDuration += 0.5;
+    generationStartTime = millis(); // Restart current period at new duration
+  }
 }
 
 void reset() {
@@ -263,6 +272,8 @@ void reset() {
       cells[i][j].offsetY = 0;
     }
   }
+  iteration();
+  generationStartTime = millis();
 }
 
 void clearGrid() {
