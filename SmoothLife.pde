@@ -36,12 +36,22 @@ class Cell {
   float offsetX = 0;
   float offsetY = 0;
 
+  // Organic blob shape: per-cell random angular offsets and radii
+  int blobPoints = 8;
+  float[] blobAngleOffset = new float[blobPoints];
+  float[] blobRadiusMult  = new float[blobPoints]; // multipliers around 1.0
+
   // For "oozing" effect
   ArrayList<PVector> parents = new ArrayList<PVector>();
 
   Cell(int x, int y) {
     this.x = x;
     this.y = y;
+    // Generate stable per-cell shape noise
+    for (int k = 0; k < blobPoints; k++) {
+      blobAngleOffset[k] = random(-0.25, 0.25);   // slight angular jitter
+      blobRadiusMult[k]  = random(0.72, 1.15);    // radius varies per lobe
+    }
   }
 
   void updateState() {
@@ -99,9 +109,18 @@ class Cell {
     if (state == BIRTH) fill(birthColor, opacity);
     else fill(aliveColor, opacity); // DYING uses aliveColor — just shrinks and fades
 
-    // Blob shape (slightly irregular ellipse)
-    float pulse = sin(frameCount * 0.05 + (x + y)) * 2;
-    ellipse(0, 0, diameter + pulse, diameter - pulse);
+    // Organic blob using closed Catmull-Rom curve through jittered radial points
+    float baseR = diameter * 0.5;
+    // Slow per-cell breathing wobble
+    float breathe = sin(frameCount * 0.04 + x * 0.7 + y * 1.1) * 0.06;
+    beginShape();
+    for (int k = 0; k < blobPoints + 3; k++) {
+      int idx = k % blobPoints;
+      float angle = TWO_PI * idx / blobPoints + blobAngleOffset[idx];
+      float r = baseR * blobRadiusMult[idx] * (1.0 + breathe);
+      curveVertex(cos(angle) * r, sin(angle) * r);
+    }
+    endShape(CLOSE);
 
     popMatrix();
   }
