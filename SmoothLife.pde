@@ -1,209 +1,277 @@
 import de.looksgood.ani.*;
 
-// Size of cells
-int cellSize = 20;
-
-// How likely for a cell to be alive at start (in percentage)
+// Configuration
+int cellSize = 25;
 float probabilityOfAliveAtStart = 15;
-
-// Variables for timer
-int interval = 100;
+float generationDuration = 3.0; // Seconds per generation
 int lastRecordedTime = 0;
 
+// State constants
 final int DEAD = 0;
-final int DYING = 1;
-final int BIRTH = 2;
-final int ALIVE = 3;
+final int BIRTH = 1;
+final int ALIVE = 2;
+final int DYING = 3;
 
-// Colors for active/inactive cells
-color aliveColor = color(0, 200, 0);
-color birthColor = color(0, 100, 0);
-color dyingColor = color(30, 30, 30);
-color deadColor = color(0);
+// Colors
+color aliveColor = color(100, 255, 150);
+color birthColor = color(50, 200, 100);
+color dyingColor = color(150, 100, 50);
+color deadColor = color(20, 20, 25);
 
-// Array of cells
-Cell[][] cells; 
-// Buffer to record the state of the cells and use this while changing the others in the interations
-Cell[][] cellsBuffer; 
+// Simulation grid
+Cell[][] cells;
+int cols, rows;
 
-// Pause
+// UI/State
 boolean pause = false;
 
 class Cell {
- int xpos, ypos, state, diameter;
- Cell (int x, int y, int s) {
-   xpos = x;
-   ypos = y;
-   state = s;
-   diameter = cellSize;
- }
- void draw() {
-  switch (state) {
-    case DEAD:
-      fill(deadColor);
-      break;
-    case DYING:
-      fill(dyingColor);
-      break;
-    case BIRTH:
-      fill(birthColor);
-      break;
-    case ALIVE:
-      fill(aliveColor);
-      break;
+  int x, y;
+  int state = DEAD;
+  int nextState = DEAD;
+  float diameter = 0;
+  float opacity = 0;
+  float offsetX = 0;
+  float offsetY = 0;
+
+  // For "oozing" effect
+  ArrayList<PVector> parents = new ArrayList<PVector>();
+
+  Cell(int x, int y) {
+    this.x = x;
+    this.y = y;
+  }
+
+  void updateState() {
+    state = nextState;
+  }
+
+  void triggerAnimations() {
+    float duration = generationDuration * 0.9; // Leave a small buffer
+
+    if (state == BIRTH) {
+      // Ooze in from parents
+      diameter = 0;
+      opacity = 0;
+
+      // Pick a random parent to "ooze" from if available
+      if (parents.size() > 0) {
+        PVector p = parents.get(int(random(parents.size())));
+        offsetX = (p.x - x) * cellSize;
+        offsetY = (p.y - y) * cellSize;
+        Ani.to(this, duration, "offsetX", 0, Ani.EXPO_OUT);
+        Ani.to(this, duration, "offsetY", 0, Ani.EXPO_OUT);
+      }
+
+      Ani.to(this, duration, "diameter", cellSize * 0.8, Ani.ELASTIC_OUT);
+      Ani.to(this, duration, "opacity", 255, Ani.LINEAR);
     }
-    ellipse(xpos*cellSize+cellSize/2, ypos*cellSize+cellSize/2, diameter, diameter); 
- }
- 
+    else if (state == DYING) {
+      // Evaporate
+      Ani.to(this, duration, "diameter", 0, Ani.EXPO_IN);
+      Ani.to(this, duration, "opacity", 0, Ani.LINEAR);
+      Ani.to(this, duration, "offsetY", -cellSize * 0.5, Ani.QUAD_IN); // Float up slightly
+    }
+    else if (state == ALIVE) {
+      // Keep solid
+      diameter = cellSize * 0.8;
+      opacity = 255;
+      offsetX = 0;
+      offsetY = 0;
+    }
+    else {
+      // Dead
+      diameter = 0;
+      opacity = 0;
+    }
+  }
+
+  void draw() {
+    if (opacity <= 0 && state == DEAD) return;
+
+    pushMatrix();
+    translate(x * cellSize + cellSize/2 + offsetX, y * cellSize + cellSize/2 + offsetY);
+
+    noStroke();
+    if (state == BIRTH) fill(birthColor, opacity);
+    else if (state == DYING) fill(dyingColor, opacity);
+    else fill(aliveColor, opacity);
+
+    // Blob shape (slightly irregular ellipse)
+    float pulse = sin(frameCount * 0.05 + (x + y)) * 2;
+    ellipse(0, 0, diameter + pulse, diameter - pulse);
+
+    popMatrix();
+  }
 }
 
 void setup() {
-  size (1280, 720);
+  size(1200, 800);
+  frameRate(60);
 
-   Ani.init(this);
-   Ani.setDefaultEasing(Ani.BACK_IN_OUT);
+  Ani.init(this);
 
-  // Instantiate arrays 
-  cells = new Cell[width/cellSize][height/cellSize];
-  cellsBuffer = new Cell[width/cellSize][height/cellSize];
+  cols = width / cellSize;
+  rows = height / cellSize;
+  cells = new Cell[cols][rows];
 
-  // This stroke will draw the background grid
-  stroke(48);
-  smooth();
-
-  // Initialization of cells
-  for (int x=0; x<width/cellSize; x++) {
-    for (int y=0; y<height/cellSize; y++) {
-      float state = random (100);
-      //cells[x][y] = (state > probabilityOfAliveAtStart) ? DEAD : ALIVE;
-      cells[x][y] = new Cell(x, y, (state > probabilityOfAliveAtStart) ? DEAD : ALIVE);
-      cellsBuffer[x][y] = new Cell(x, y, DEAD);
+  for (int i = 0; i < cols; i++) {
+    for (int j = 0; j < rows; j++) {
+      cells[i][j] = new Cell(i, j);
+      if (random(100) < probabilityOfAliveAtStart) {
+        cells[i][j].state = ALIVE;
+        cells[i][j].diameter = cellSize * 0.8;
+        cells[i][j].opacity = 255;
+      }
     }
-  } 
-  background(0); // Fill in black in case cells don't cover all the windows
-}
+  }
 
+  lastRecordedTime = millis();
+}
 
 void draw() {
+  background(deadColor);
 
-  //Draw grid
-  for (int x=0; x<width/cellSize; x++) {
-    for (int y=0; y<height/cellSize; y++) {
-      cells[x][y].draw();
+  // Draw grid subtle
+  stroke(30, 30, 40);
+  for (int i = 0; i <= width; i += cellSize) line(i, 0, i, height);
+  for (int j = 0; j <= height; j += cellSize) line(0, j, width, j);
+
+  // Update and draw cells
+  for (int i = 0; i < cols; i++) {
+    for (int j = 0; j < rows; j++) {
+      cells[i][j].draw();
     }
   }
-  // Iterate if timer ticks
-  if (millis()-lastRecordedTime>interval) {
-    if (!pause) {
-      iteration();
-      lastRecordedTime = millis();
-    }
+
+  // Timer for logic
+  if (!pause && millis() - lastRecordedTime > generationDuration * 1000) {
+    iteration();
+    lastRecordedTime = millis();
   }
 
-  // Create  new cells manually on pause
-  if (pause && mousePressed) {
-    // Map and avoid out of bound errors
-    int xCellOver = int(map(mouseX, 0, width, 0, width/cellSize));
-    xCellOver = constrain(xCellOver, 0, width/cellSize-1);
-    int yCellOver = int(map(mouseY, 0, height, 0, height/cellSize));
-    yCellOver = constrain(yCellOver, 0, height/cellSize-1);
+  // UI Info
+  fill(255, 150);
+  text("Generation Time: " + nf(generationDuration, 1, 1) + "s (Use +/- to change)", 20, 30);
+  text("Space: Pause | R: Reset | C: Clear", 20, 50);
+}
 
-    // Check against cells in buffer
-    if (cellsBuffer[xCellOver][yCellOver].state >= BIRTH) { // Cell is alive
-      cells[xCellOver][yCellOver].state =DEAD; // Kill
-      fill(deadColor); // Fill with kill color
-    } else { // Cell is dead
-      cells[xCellOver][yCellOver].state = ALIVE; // Make alive
-      fill(aliveColor); // Fill alive color
-    }
-  } 
-  else if (pause && !mousePressed) { // And then save to buffer once mouse goes up
-    // Save cells to buffer (so we opeate with one array keeping the other intact)
-    for (int x=0; x<width/cellSize; x++) {
-      for (int y=0; y<height/cellSize; y++) {
-        cellsBuffer[x][y].state = cells[x][y].state;
+void iteration() {
+  // 1. Calculate next states based on current states
+  for (int i = 0; i < cols; i++) {
+    for (int j = 0; j < rows; j++) {
+      int neighbors = countNeighbors(i, j);
+      Cell c = cells[i][j];
+
+      c.parents.clear();
+
+      if (c.state == ALIVE || c.state == BIRTH) {
+        if (neighbors < 2 || neighbors > 3) {
+          c.nextState = DYING;
+        } else {
+          c.nextState = ALIVE;
+        }
+      } else {
+        if (neighbors == 3) {
+          c.nextState = BIRTH;
+          // Find parents for oozing effect
+          findParents(i, j);
+        } else {
+          c.nextState = DEAD;
+        }
       }
+    }
+  }
+
+  // 2. Apply states and trigger animations
+  for (int i = 0; i < cols; i++) {
+    for (int j = 0; j < rows; j++) {
+      cells[i][j].updateState();
+      cells[i][j].triggerAnimations();
     }
   }
 }
 
+int countNeighbors(int x, int y) {
+  int count = 0;
+  for (int i = -1; i <= 1; i++) {
+    for (int j = -1; j <= 1; j++) {
+      if (i == 0 && j == 0) continue;
 
+      int col = (x + i + cols) % cols;
+      int row = (y + j + rows) % rows;
 
-void iteration() { // When the clock ticks
-  // Save cells to buffer (so we opeate with one array keeping the other intact)
-  for (int x=0; x<width/cellSize; x++) {
-    for (int y=0; y<height/cellSize; y++) {
-      cellsBuffer[x][y].state = cells[x][y].state;
+      if (cells[col][row].state == ALIVE || cells[col][row].state == BIRTH) {
+        count++;
+      }
     }
   }
+  return count;
+}
 
-  // Visit each cell:
-  for (int x=0; x<width/cellSize; x++) {
-    for (int y=0; y<height/cellSize; y++) {
-      // And visit all the neighbours of each cell
-      int neighbours = 0; // We'll count the neighbours
-      for (int xx=x-1; xx<=x+1;xx++) {
-        for (int yy=y-1; yy<=y+1;yy++) {  
-          if (((xx>=0)&&(xx<width/cellSize))&&((yy>=0)&&(yy<height/cellSize))) { // Make sure you are not out of bounds
-            if (!((xx==x)&&(yy==y))) { // Make sure to to check against self
-              if (cellsBuffer[xx][yy].state >= BIRTH){
-                neighbours ++; // Check alive neighbours and count them
-              }
-            } // End of if
-          } // End of if
-        } // End of yy loop
-      } //End of xx loop
-      // We've checked the neigbours: apply rules!
-      if (cellsBuffer[x][y].state >=BIRTH) { // The cell is alive: kill it if necessary
-        if (neighbours < 2 || neighbours > 3) {
-          cells[x][y].state = DYING; // Die unless it has 2 or 3 neighbours
-        } else {
-          cells[x][y].state = ALIVE; // upgrade birthed cells to fully alive
-        }
-      } 
-      else { // The cell is dying or dead: make it live if necessary      
-        if (neighbours == 3 ) {
-          cells[x][y].state = BIRTH; // Only if it has 3 neighbours
-        } else {
-          cells[x][y].state = DEAD; // upgrade dying cells to fully dead
-        }
-      } // End of if
-    } // End of y loop
-  } // End of x loop
-  
-/*  
-  for (int x=0; x<width/cellSize; x++) {
-    for (int y=0; y<height/cellSize; y++) {
-      if (cells[x][y].state >= BIRTH) {
-        Ani.to(cells[x][y], interval/2, "diameter", cellSize);
-      } else {
-        Ani.from(cells[x][y], interval/2, "diameter", 0);   
-      }     
+void findParents(int x, int y) {
+  for (int i = -1; i <= 1; i++) {
+    for (int j = -1; j <= 1; j++) {
+      if (i == 0 && j == 0) continue;
+
+      int col = (x + i + cols) % cols;
+      int row = (y + j + rows) % rows;
+
+      if (cells[col][row].state == ALIVE || cells[col][row].state == BIRTH) {
+        cells[x][y].parents.add(new PVector(col, row));
+      }
     }
   }
-*/
-  
-} // End of function
+}
 
 void keyPressed() {
-  if (key=='r' || key == 'R') {
-    // Restart: reinitialization of cells
-    for (int x=0; x<width/cellSize; x++) {
-      for (int y=0; y<height/cellSize; y++) {
-        float state = random (100);
-        cells[x][y].state = (state > probabilityOfAliveAtStart) ? DEAD : ALIVE;
+  if (key == ' ') pause = !pause;
+  if (key == 'r' || key == 'R') reset();
+  if (key == 'c' || key == 'C') clearGrid();
+  if (key == '+' || key == '=') generationDuration = max(0.1, generationDuration - 0.5);
+  if (key == '-' || key == '_') generationDuration += 0.5;
+}
+
+void reset() {
+  for (int i = 0; i < cols; i++) {
+    for (int j = 0; j < rows; j++) {
+      if (random(100) < probabilityOfAliveAtStart) {
+        cells[i][j].state = ALIVE;
+        cells[i][j].diameter = cellSize * 0.8;
+        cells[i][j].opacity = 255;
+      } else {
+        cells[i][j].state = DEAD;
+        cells[i][j].diameter = 0;
+        cells[i][j].opacity = 0;
       }
-    }
-  }
-  if (key==' ') { // On/off of pause
-    pause = !pause;
-  }
-  if (key=='c' || key == 'C') { // Clear all
-    for (int x=0; x<width/cellSize; x++) {
-      for (int y=0; y<height/cellSize; y++) {
-        cells[x][y].state = DEAD; // Save all to zero
-      }
+      cells[i][j].offsetX = 0;
+      cells[i][j].offsetY = 0;
     }
   }
 }
 
+void clearGrid() {
+  for (int i = 0; i < cols; i++) {
+    for (int j = 0; j < rows; j++) {
+      cells[i][j].state = DEAD;
+      cells[i][j].diameter = 0;
+      cells[i][j].opacity = 0;
+    }
+  }
+}
+
+void mousePressed() {
+  int i = mouseX / cellSize;
+  int j = mouseY / cellSize;
+  if (i >= 0 && i < cols && j >= 0 && j < rows) {
+    if (cells[i][j].state == DEAD) {
+      cells[i][j].state = ALIVE;
+      cells[i][j].diameter = cellSize * 0.8;
+      cells[i][j].opacity = 255;
+    } else {
+      cells[i][j].state = DEAD;
+      cells[i][j].diameter = 0;
+      cells[i][j].opacity = 0;
+    }
+  }
+}
