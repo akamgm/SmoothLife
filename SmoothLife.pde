@@ -37,9 +37,10 @@ class Cell {
   float offsetY = 0;
 
   // Organic blob shape: per-cell random angular offsets and radii
-  int blobPoints = 8;
-  float[] blobAngleOffset = new float[blobPoints];
-  float[] blobRadiusMult  = new float[blobPoints]; // multipliers around 1.0
+  static final int BLOB_N = 8;
+  // Precomputed base angles + per-cell jitter, and per-lobe radius multipliers
+  float[] blobAngle = new float[BLOB_N];
+  float[] blobRadiusMult = new float[BLOB_N];
 
   // For "oozing" effect
   ArrayList<PVector> parents = new ArrayList<PVector>();
@@ -47,10 +48,10 @@ class Cell {
   Cell(int x, int y) {
     this.x = x;
     this.y = y;
-    // Generate stable per-cell shape noise
-    for (int k = 0; k < blobPoints; k++) {
-      blobAngleOffset[k] = random(-0.25, 0.25);   // slight angular jitter
-      blobRadiusMult[k]  = random(0.72, 1.15);    // radius varies per lobe
+    for (int k = 0; k < BLOB_N; k++) {
+      // Precompute final angle (base + jitter) once — no per-frame division
+      blobAngle[k] = TWO_PI * k / BLOB_N + random(-0.25, 0.25);
+      blobRadiusMult[k] = random(0.72, 1.15);
     }
   }
 
@@ -59,15 +60,12 @@ class Cell {
   }
 
   void triggerAnimations() {
-    // Animations fill the full generation duration — no buffer gap
     float duration = generationDuration;
 
     if (state == BIRTH) {
-      // Ooze in from parents
       diameter = 0;
       opacity = 0;
 
-      // Pick a random parent to "ooze" from if available
       if (parents.size() > 0) {
         PVector p = parents.get(int(random(parents.size())));
         offsetX = (p.x - x) * cellSize;
@@ -80,20 +78,17 @@ class Cell {
       Ani.to(this, duration, "opacity", 255, Ani.LINEAR);
     }
     else if (state == DYING) {
-      // Shrink and fade (keep current color — don't change it)
       Ani.to(this, duration, "diameter", 0, Ani.EXPO_IN);
       Ani.to(this, duration, "opacity", 0, Ani.LINEAR);
-      Ani.to(this, duration, "offsetY", -cellSize * 0.5, Ani.QUAD_IN); // Float up slightly
+      Ani.to(this, duration, "offsetY", -cellSize * 0.5, Ani.QUAD_IN);
     }
     else if (state == ALIVE) {
-      // Keep solid
       diameter = cellSize * 0.8;
       opacity = 255;
       offsetX = 0;
       offsetY = 0;
     }
     else {
-      // Dead
       diameter = 0;
       opacity = 0;
     }
@@ -102,33 +97,32 @@ class Cell {
   void draw() {
     if (opacity <= 0 && state == DEAD) return;
 
-    pushMatrix();
-    translate(x * cellSize + cellSize/2 + offsetX, y * cellSize + cellSize/2 + offsetY);
+    // Compute center directly — avoids pushMatrix/popMatrix/translate overhead
+    float cx = x * cellSize + cellSize * 0.5 + offsetX;
+    float cy = y * cellSize + cellSize * 0.5 + offsetY;
 
     noStroke();
     if (state == BIRTH) fill(birthColor, opacity);
-    else fill(aliveColor, opacity); // DYING uses aliveColor — just shrinks and fades
+    else fill(aliveColor, opacity);
 
-    // Organic blob using closed Catmull-Rom curve through jittered radial points
     float baseR = diameter * 0.5;
-    // Slow per-cell breathing wobble
-    float breathe = sin(frameCount * 0.04 + x * 0.7 + y * 1.1) * 0.06;
+    // Breathing: one sin() per visible cell per frame (cheap)
+    float breathe = 1.0 + sin(frameCount * 0.04 + x * 0.7 + y * 1.1) * 0.06;
+
+    // Catmull-Rom closed blob — wrap 3 extra points for smooth closure
     beginShape();
-    for (int k = 0; k < blobPoints + 3; k++) {
-      int idx = k % blobPoints;
-      float angle = TWO_PI * idx / blobPoints + blobAngleOffset[idx];
-      float r = baseR * blobRadiusMult[idx] * (1.0 + breathe);
-      curveVertex(cos(angle) * r, sin(angle) * r);
+    for (int k = 0; k < BLOB_N + 3; k++) {
+      int idx = k % BLOB_N;
+      float r = baseR * blobRadiusMult[idx] * breathe;
+      curveVertex(cx + cos(blobAngle[idx]) * r,
+                  cy + sin(blobAngle[idx]) * r);
     }
     endShape(CLOSE);
-
-    popMatrix();
   }
 }
 
 void setup() {
-  size(1200, 800);
-  frameRate(60);
+  size(1200, 800, P2D); // P2D = OpenGL-backed renderer, much faster for many shapes
 
   Ani.init(this);
 
@@ -147,7 +141,6 @@ void setup() {
     }
   }
 
-  // Compute the first generation immediately and start animating
   iteration();
   generationStartTime = millis();
 }
@@ -155,32 +148,31 @@ void setup() {
 void draw() {
   background(deadColor);
 
-  // Draw grid subtle
-  stroke(30, 30, 40);
-  for (int i = 0; i <= width; i += cellSize) line(i, 0, i, height);
-  for (int j = 0; j <= height; j += cellSize) line(0, j, width, j);
+  // Only draw grid lines when cells are large enough to see them
+  if (cellSize >= 10) {
+    stroke(30, 30, 40);
+    for (int i = 0; i <= width; i += cellSize) line(i, 0, i, height);
+    for (int j = 0; j <= height; j += cellSize) line(0, j, width, j);
+  }
 
-  // Update and draw cells
   for (int i = 0; i < cols; i++) {
     for (int j = 0; j < rows; j++) {
       cells[i][j].draw();
     }
   }
 
-  // Advance generation exactly when the current animation period ends
   if (!pause && millis() - generationStartTime >= generationDuration * 1000) {
-    generationStartTime += generationDuration * 1000; // Step forward, not reset — prevents drift
+    generationStartTime += generationDuration * 1000;
     iteration();
   }
 
-  // UI Info
   fill(255, 150);
+  textMode(MODEL); // Required for text in P2D
   text("Generation Time: " + nf(generationDuration, 1, 1) + "s (Use +/- to change)", 20, 30);
   text("Space: Pause | R: Reset | C: Clear", 20, 50);
 }
 
 void iteration() {
-  // 1. Calculate next states based on current states
   for (int i = 0; i < cols; i++) {
     for (int j = 0; j < rows; j++) {
       int neighbors = countNeighbors(i, j);
@@ -197,7 +189,6 @@ void iteration() {
       } else {
         if (neighbors == 3) {
           c.nextState = BIRTH;
-          // Find parents for oozing effect
           findParents(i, j);
         } else {
           c.nextState = DEAD;
@@ -206,7 +197,6 @@ void iteration() {
     }
   }
 
-  // 2. Apply states and trigger animations
   for (int i = 0; i < cols; i++) {
     for (int j = 0; j < rows; j++) {
       cells[i][j].updateState();
@@ -267,11 +257,11 @@ void keyPressed() {
   if (key == 'c' || key == 'C') clearGrid();
   if (key == '+' || key == '=') {
     generationDuration = max(0.5, generationDuration - 0.5);
-    generationStartTime = millis(); // Restart current period at new duration
+    generationStartTime = millis();
   }
   if (key == '-' || key == '_') {
     generationDuration += 0.5;
-    generationStartTime = millis(); // Restart current period at new duration
+    generationStartTime = millis();
   }
 }
 
